@@ -1,5 +1,7 @@
 import platform
+import shlex
 import shutil
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -73,14 +75,21 @@ CURRENT_OS: OSInfo = detect()
 
 
 # ── Per-OS package manager commands ────────────────────────────────────────────
+# Store install commands as argv prefixes so execution never needs a shell.
+# PACKAGE_INSTALL_CMDS stays available for display/backward compatibility.
+_PACKAGE_INSTALL_PREFIXES: dict[str, tuple[str, ...]] = {
+    "apt-get": ("apt-get", "install", "-y"),
+    "pacman":  ("pacman", "-S", "--noconfirm"),
+    "dnf":     ("dnf", "install", "-y"),
+    "zypper":  ("zypper", "install", "-y"),
+    "apk":     ("apk", "add"),
+    "brew":    ("brew", "install"),
+    "pkg":     ("pkg", "install", "-y"),
+}
+
 PACKAGE_INSTALL_CMDS: dict[str, str] = {
-    "apt-get": "apt-get install -y {packages}",
-    "pacman":  "pacman -S --noconfirm {packages}",
-    "dnf":     "dnf install -y {packages}",
-    "zypper":  "zypper install -y {packages}",
-    "apk":     "apk add {packages}",
-    "brew":    "brew install {packages}",
-    "pkg":     "pkg install -y {packages}",
+    manager: f"{shlex.join(prefix)} {{packages}}"
+    for manager, prefix in _PACKAGE_INSTALL_PREFIXES.items()
 }
 
 PACKAGE_UPDATE_CMDS: dict[str, str] = {
@@ -107,25 +116,57 @@ REQUIRED_PACKAGES: dict[str, list[str]] = {
 }
 
 
+def _package_install_argv(
+    packages: list[str],
+    os_info: OSInfo,
+) -> list[str] | None:
+    """Build a package-manager argv without invoking a shell."""
+    prefix = _PACKAGE_INSTALL_PREFIXES.get(os_info.pkg_manager)
+    if prefix is None:
+        return None
+
+    normalized: list[str] = []
+    for package in packages:
+        if not isinstance(package, str):
+            raise TypeError("package names must be strings")
+        package = package.strip()
+        if not package or "\x00" in package or any(char.isspace() for char in package):
+            raise ValueError(f"invalid package name: {package!r}")
+        if package.startswith("-"):
+            raise ValueError(f"package name cannot be an option: {package!r}")
+        normalized.append(package)
+
+    command = [*prefix, *normalized]
+    if os_info.system == "linux" and not os_info.is_root:
+        from hackingtool.constants import PRIV_CMD
+        command.insert(0, PRIV_CMD)
+    return command
+
+
 def install_packages(packages: list[str], os_info: OSInfo | None = None) -> bool:
-    """Install system packages using the detected package manager."""
-    import subprocess
+    """Install system packages using the detected package manager.
+
+    Package names are passed as literal argv entries and never interpreted by a
+    shell.
+    """
     if os_info is None:
         os_info = CURRENT_OS
 
-    mgr = os_info.pkg_manager
-    if mgr not in PACKAGE_INSTALL_CMDS:
-        print(f"[warning] Unknown package manager. Install manually: {packages}")
+    try:
+        command = _package_install_argv(packages, os_info)
+    except (TypeError, ValueError) as exc:
+        print(f"[warning] Refusing invalid package request: {exc}")
         return False
 
-    cmd_template = PACKAGE_INSTALL_CMDS[mgr]
-    pkg_str = " ".join(packages)
-    cmd = cmd_template.format(packages=pkg_str)
+    if command is None:
+        print(f"[warning] Unknown package manager. Install manually: {packages}")
+        return False
+    if not packages:
+        return True
 
-    # Prepend privilege escalation only on Linux (brew on macOS doesn't need sudo)
-    if os_info.system == "linux" and not os_info.is_root:
-        from hackingtool.constants import PRIV_CMD
-        cmd = f"{PRIV_CMD} {cmd}"
-
-    result = subprocess.run(cmd, shell=True, check=False)
+    try:
+        result = subprocess.run(command, check=False)
+    except OSError as exc:
+        print(f"[warning] Could not execute {os_info.pkg_manager}: {exc}")
+        return False
     return result.returncode == 0
