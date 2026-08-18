@@ -30,10 +30,10 @@ def detect() -> OSInfo:
         system = "macos"
 
     info = OSInfo(
-        system  = system,
-        is_root = (os.geteuid() == 0) if hasattr(os, "geteuid") else False,
-        home_dir = Path.home(),
-        arch    = platform.machine(),
+        system=system,
+        is_root=(os.geteuid() == 0) if hasattr(os, "geteuid") else False,
+        home_dir=Path.home(),
+        arch=platform.machine(),
     )
 
     # ── Linux-specific ─────────────────────────────────────────────────────────
@@ -55,8 +55,8 @@ def detect() -> OSInfo:
             except FileNotFoundError:
                 continue
 
-        info.distro_id      = os_release.get("ID", "").lower()
-        info.distro_like    = os_release.get("ID_LIKE", "").lower()
+        info.distro_id = os_release.get("ID", "").lower()
+        info.distro_like = os_release.get("ID_LIKE", "").lower()
         info.distro_version = os_release.get("VERSION_ID", "")
 
     # ── Package manager detection (in priority order) ──────────────────────────
@@ -75,35 +75,50 @@ CURRENT_OS: OSInfo = detect()
 # ── Per-OS package manager commands ────────────────────────────────────────────
 PACKAGE_INSTALL_CMDS: dict[str, str] = {
     "apt-get": "apt-get install -y {packages}",
-    "pacman":  "pacman -S --noconfirm {packages}",
-    "dnf":     "dnf install -y {packages}",
-    "zypper":  "zypper install -y {packages}",
-    "apk":     "apk add {packages}",
-    "brew":    "brew install {packages}",
-    "pkg":     "pkg install -y {packages}",
+    "pacman": "pacman -S --noconfirm {packages}",
+    "dnf": "dnf install -y {packages}",
+    "zypper": "zypper install -y {packages}",
+    "apk": "apk add {packages}",
+    "brew": "brew install {packages}",
+    "pkg": "pkg install -y {packages}",
 }
 
-PACKAGE_UPDATE_CMDS: dict[str, str] = {
-    "apt-get": "apt-get update -qq && apt-get upgrade -y",
-    "pacman":  "pacman -Syu --noconfirm",
-    "dnf":     "dnf upgrade -y",
-    "zypper":  "zypper update -y",
-    "apk":     "apk update && apk upgrade",
-    "brew":    "brew update && brew upgrade",
-    "pkg":     "pkg update && pkg upgrade -y",
+# Each package-manager update is represented as one or more immutable argv
+# vectors. Multi-stage updates (apt/apk) are executed sequentially, so no shell
+# parser is needed for ``&&`` chaining.
+PACKAGE_UPDATE_CMDS: dict[str, tuple[tuple[str, ...], ...]] = {
+    "apt-get": (
+        ("apt-get", "update", "-qq"),
+        ("apt-get", "upgrade", "-y"),
+    ),
+    "pacman": (("pacman", "-Syu", "--noconfirm"),),
+    "dnf": (("dnf", "upgrade", "-y"),),
+    "zypper": (("zypper", "update", "-y"),),
+    "apk": (
+        ("apk", "update"),
+        ("apk", "upgrade"),
+    ),
+    "brew": (
+        ("brew", "update"),
+        ("brew", "upgrade"),
+    ),
+    "pkg": (
+        ("pkg", "update"),
+        ("pkg", "upgrade", "-y"),
+    ),
 }
 
 # Core system packages needed per package manager
 REQUIRED_PACKAGES: dict[str, list[str]] = {
     "apt-get": ["git", "python3-pip", "python3-venv", "curl", "wget",
                 "ruby", "ruby-dev", "golang-go", "php", "default-jre-headless"],
-    "pacman":  ["git", "python-pip", "curl", "wget",
-                "ruby", "go", "php", "jre-openjdk-headless"],
-    "dnf":     ["git", "python3-pip", "curl", "wget",
-                "ruby", "golang", "php", "java-17-openjdk-headless"],
-    "zypper":  ["git", "python3-pip", "curl", "wget", "ruby", "go", "php"],
-    "brew":    ["git", "python3", "curl", "wget", "ruby", "go", "php"],
-    "pkg":     ["git", "python3", "py39-pip", "curl", "wget", "ruby", "go", "php83"],
+    "pacman": ["git", "python-pip", "curl", "wget",
+               "ruby", "go", "php", "jre-openjdk-headless"],
+    "dnf": ["git", "python3-pip", "curl", "wget",
+            "ruby", "golang", "php", "java-17-openjdk-headless"],
+    "zypper": ["git", "python3-pip", "curl", "wget", "ruby", "go", "php"],
+    "brew": ["git", "python3", "curl", "wget", "ruby", "go", "php"],
+    "pkg": ["git", "python3", "py39-pip", "curl", "wget", "ruby", "go", "php83"],
 }
 
 
