@@ -3,7 +3,7 @@ import json
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from fnmatch import fnmatch
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from hackingtool.constants import USER_CONFIG_DIR
 
@@ -12,6 +12,34 @@ ENGAGEMENTS_ROOT = USER_CONFIG_DIR / "engagements"
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _validate_name(name: str) -> str:
+    """Require an engagement name to be one safe filesystem component."""
+    if not isinstance(name, str):
+        raise TypeError("engagement name must be a string")
+    if not name or not name.strip() or name in {".", ".."}:
+        raise ValueError("engagement name must not be empty, '.' or '..'")
+    if "\x00" in name or "/" in name or "\\" in name:
+        raise ValueError("engagement name must not contain path separators")
+    if PureWindowsPath(name).drive:
+        raise ValueError("engagement name must not contain a Windows drive prefix")
+    return name
+
+
+def _workspace_path(name: str) -> Path:
+    """Resolve a validated engagement directory below ``ENGAGEMENTS_ROOT``."""
+    safe_name = _validate_name(name)
+    root = ENGAGEMENTS_ROOT.expanduser().resolve()
+    candidate = root / safe_name
+    resolved = candidate.resolve(strict=False)
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("engagement workspace escapes the configured root") from exc
+    if resolved == root:
+        raise ValueError("engagement workspace must be below the configured root")
+    return resolved
 
 
 @dataclass
@@ -25,7 +53,7 @@ class Engagement:
 
     @property
     def workspace(self) -> Path:
-        return ENGAGEMENTS_ROOT / self.name
+        return _workspace_path(self.name)
 
     @property
     def raw_dir(self) -> Path:
@@ -72,15 +100,21 @@ class Engagement:
 
 
 def load(name: str) -> Engagement | None:
-    f = ENGAGEMENTS_ROOT / name / "engagement.json"
+    f = _workspace_path(name) / "engagement.json"
     if not f.exists():
         return None
-    return Engagement(**json.loads(f.read_text()))
+    loaded = Engagement(**json.loads(f.read_text()))
+    if loaded.name != name:
+        raise ValueError("stored engagement name does not match its directory")
+    # Validate the stored value too before returning an object that can write.
+    _workspace_path(loaded.name)
+    return loaded
 
 
 def create(name: str, targets: list[str] | None = None,
            scope_in: list[str] | None = None,
            scope_out: list[str] | None = None) -> Engagement:
+    _validate_name(name)
     targets = targets or []
     # default scope-in to the targets themselves when none given
     scope_in = scope_in if scope_in is not None else list(targets)
