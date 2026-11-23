@@ -1,10 +1,35 @@
-import os
+import shlex
 import subprocess
 
 from rich.prompt import Confirm
 
 from hackingtool.core import HackingTool, HackingToolsCollection, console
-from hackingtool.constants import USER_CONFIG_DIR, REPO_WEB_URL
+from hackingtool.constants import PRIV_CMD, USER_CONFIG_DIR, REPO_WEB_URL
+
+
+def _run_system_update(command: str, os_info) -> bool:
+    """Execute a hard-coded package-manager update without a shell."""
+    steps = [
+        shlex.split(step.strip())
+        for step in command.split("&&")
+        if step.strip()
+    ]
+    if not steps or any(not step for step in steps):
+        return False
+
+    privilege = (
+        [PRIV_CMD]
+        if os_info.system == "linux" and not os_info.is_root
+        else []
+    )
+    for step in steps:
+        try:
+            result = subprocess.run([*privilege, *step], check=False)
+        except OSError:
+            return False
+        if result.returncode != 0:
+            return False
+    return True
 
 
 class UpdateTool(HackingTool):
@@ -21,12 +46,13 @@ class UpdateTool(HackingTool):
         from hackingtool.os_detect import CURRENT_OS, PACKAGE_UPDATE_CMDS
         mgr = CURRENT_OS.pkg_manager
         cmd = PACKAGE_UPDATE_CMDS.get(mgr)
-        if cmd:
-            priv = "" if (CURRENT_OS.system == "macos" or os.geteuid() == 0) else "sudo "
-            # shell=True needed — cmd contains && chains; strings are hardcoded, not user input
-            subprocess.run(f"{priv}{cmd}", shell=True, check=False)
-        else:
+        if not cmd:
             console.print("[warning]Unknown package manager — update manually.[/warning]")
+            return
+        if _run_system_update(cmd, CURRENT_OS):
+            console.print(f"[success]✔ Updated packages with {mgr}.[/success]")
+        else:
+            console.print(f"[error]✘ {mgr} update failed.[/error]")
 
     def update_ht(self):
         # hackingtool ships as a standard package (pipx/pip/.deb/docker). It can't
